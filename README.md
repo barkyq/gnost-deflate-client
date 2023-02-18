@@ -1,10 +1,10 @@
 # gnost-deflate-client
 go nostr client implementing [permessage-deflate websocket compression](https://www.rfc-editor.org/rfc/rfc7692#section-7). Downloads the results of a REQ query, saving the results in [jsonl format](https://jsonlines.org/), and logs to `stderr` some stats related to the compression.
 
-# building
+## Building
 In cloned repository run `go build .` to build the executable `gnost-deflate-client`.
 
-# running
+## Running
 accepts an array of filter json objects on stdin, and saves the returned events to a `.jsonl` file:
 ``` zsh
 echo '[{
@@ -13,7 +13,7 @@ echo '[{
 }]' | ./gnost-deflate-client --port 443 --scheme wss --host nos.lol --output events.jsonl
 ```
 
-#### compatibility with strfry
+#### Compatibility with strfry
 Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [strfry](https://github.com/hoytech/strfry)
 ```zsh
 echo '[{
