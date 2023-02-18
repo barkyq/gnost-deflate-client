@@ -25,7 +25,7 @@ import (
 )
 
 var scheme = flag.String("scheme", "wss", "ws or wss")
-var hostname = flag.String("host", "nos.lol", "port")
+var hostname = flag.String("host", "nos.lol", "hostname to connect to")
 var port = flag.Int("port", 443, "port")
 var output = flag.String("output", "events.jsonl", "output file")
 
@@ -34,12 +34,12 @@ const RBS = 1024
 
 func main() {
 	flag.Parse()
-	f := nostr.Filter{}
+	f := make(nostr.Filters, 0)
 	dec := json.NewDecoder(os.Stdin)
 	if err := dec.Decode(&f); err != nil {
 		panic(err)
 	}
-	nostr_handler(*output, *scheme, *hostname, *port, nostr.Filters{f})
+	nostr_handler(*output, *scheme, *hostname, *port, f)
 }
 
 func nostr_handler(output string, scheme string, hostname string, port int, filters nostr.Filters) {
