@@ -1,8 +1,8 @@
 # gnost-deflate-client
-`go` nostr client implementing permessage-deflate websocket compression. Download the results of a REQ query to a `.jsonl` file. Prints out some stats related to the compression.
+go nostr client implementing permessage-deflate websocket compression. Downloads the results of a REQ query to a `.jsonl` file, and prints out some stats related to the compression.
 
 # building
-in cloned repository run `go build .`, this builds the executable `gnost-deflate-client`.
+In cloned repository run `go build .` to build the executable `gnost-deflate-client`.
 
 # running
 accepts a single filter json object on stdin, and saves the result to a `.jsonl` file:
