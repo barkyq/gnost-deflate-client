@@ -12,10 +12,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/url"
 	"os"
+
 	"sync"
 	"time"
 
@@ -27,9 +29,9 @@ import (
 )
 
 var scheme = flag.String("scheme", "wss", "ws or wss")
-var hostname = flag.String("host", "nos.lol", "hostname to connect to")
-var port = flag.Int("port", 443, "port")
-var output = flag.String("output", "events.jsonl", "output file")
+var hostname = flag.String("host", "nos.lol", "relay hostname")
+var port = flag.Int("port", 443, "remote TCP port")
+var output = flag.String("output", "events.jsonl", "output file. use - for stdout")
 
 // Read Buffer Size
 const RBS = 1024
@@ -41,10 +43,16 @@ func main() {
 	if err := dec.Decode(&f); err != nil {
 		panic(err)
 	}
-	nostr_handler(*output, *scheme, *hostname, *port, f)
+	logger := log.New(os.Stderr, "", 0)
+	nostr_handler(*output, *scheme, *hostname, *port, f, logger)
 }
 
-func nostr_handler(output string, scheme string, hostname string, port int, filters nostr.Filters) {
+func nostr_handler(output string, scheme string, hostname string, port int, filters nostr.Filters, logger *log.Logger) {
+	u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port))
+	if err != nil {
+		panic(err)
+	}
+
 	var conn io.ReadWriter
 	switch scheme {
 	case "ws":
@@ -62,10 +70,13 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	default:
 		panic("invalid scheme")
 	}
-	u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port))
-	if err != nil {
-		panic(err)
+
+	info, e := NIP11_fetch(conn, hostname)
+	if e != nil {
+		panic(e)
 	}
+	logger.Printf("software: %s\n", info.Software)
+
 	head := make(ws.HandshakeHeaderHTTP)
 	head["User-Agent"] = []string{"barkyq-websocket-client/1.0"}
 
@@ -100,28 +111,25 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	jump:
 	}
 	if permessage_deflate {
-		fmt.Print("permessage_deflate")
+		var ex string
+		ex += "compression: permessage-deflate"
 		if server_nct {
-			fmt.Print("; server_no_context_takeover")
+			ex += "; server_no_context_takeover"
 		}
 		if client_nct {
-			fmt.Print("; client_no_context_takeover")
+			ex += "; client_no_context_takeover"
 		}
-		fmt.Println()
+		logger.Println(ex)
 	} else {
-		fmt.Println("relay does not implement permessage_deflate.")
+		logger.Println("relay does not implement permessage_deflate.")
 	}
 
 	json_msgs := make(chan Message, 5)
 	ctx, cancel := context.WithCancel(context.Background())
-
-	if err != nil {
-		panic(err)
-	}
 	flush_bytes := [4]byte{0x00, 0x00, 0xff, 0xff}
 
-	var writer io.WriteCloser // date to writer is compressed (if negotiated) and sent to reader
-	var reader io.Reader      // data in reader is framed and sent to websocket connection
+	var writer io.WriteCloser // data to writer is compressed (if negotiated) and sent to reader
+	var reader io.Reader      // data to reader is framed and sent to websocket connection
 
 	// compression handler
 	if permessage_deflate {
@@ -180,10 +188,10 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				switch {
 				case e == nil:
 				case e == io.EOF:
-					if e := ws.WriteFrame(conn, ws.NewCloseFrame(ws.NewCloseFrameBody(ws.StatusNormalClosure, "goodbye"))); e != nil {
+					if e := ws.WriteFrame(conn, ws.MaskFrame(ws.NewCloseFrame(ws.NewCloseFrameBody(ws.StatusNormalClosure, "")))); e != nil {
 						panic(e)
 					}
-					time.Sleep(1 * time.Second)
+					time.Sleep(10 * time.Second)
 					if cl, ok := conn.(io.Closer); ok == true {
 						cl.Close()
 					}
@@ -211,9 +219,9 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	// receiving handler
 	go func() {
 		defer cancel()
-		if e := payload_conn_handler(permessage_deflate, server_nct, br, conn, json_msgs); e != nil {
+		if e := websocket_receive_handler(logger, permessage_deflate, server_nct, br, conn, json_msgs); e != nil {
 			if e == io.EOF || errors.Is(e, net.ErrClosed) {
-				fmt.Println("relay closed the connection ungracefully.")
+				logger.Println("relay closed the connection ungracefully.")
 			} else {
 				panic(e)
 			}
@@ -254,14 +262,19 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	// handle returned messages
 	nip42_auth := sync.Once{}
 	var file_enc *json.Encoder
-	var close func() error
-	if f, err := os.Create(output); err == nil {
-		file_enc = json.NewEncoder(f)
-		close = f.Close
-		file_enc.SetEscapeHTML(false)
+	if output == "-" {
+		file_enc = json.NewEncoder(os.Stdout)
 	} else {
-		panic(err)
+		if f, err := os.Create(output); err == nil {
+			defer f.Close()
+			file_enc = json.NewEncoder(f)
+		} else {
+			panic(err)
+		}
 	}
+	file_enc.SetEscapeHTML(false)
+
+	// count the returned notes:
 	var counter int
 	for {
 		select {
@@ -273,20 +286,19 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				if err := json.Unmarshal(msg.jmsg[1], &challenge); err != nil {
 					panic(err)
 				}
-				close()
 				writer.Close()
-				fmt.Printf("EOSE: %d events saved to %s\n", counter, output)
+				logger.Printf("EOSE: %d events written to %s\n", counter, output)
 			case [2]byte{'E', 'V'}:
 				counter++
 				file_enc.Encode(msg.jmsg[2])
 			case [2]byte{'N', 'O'}:
 				json.Unmarshal(msg.jmsg[1], &notice)
-				fmt.Printf("NOTICE: %s\n", notice)
+				logger.Printf("NOTICE: %s\n", notice)
 			case [2]byte{'O', 'K'}:
 				json.Unmarshal(msg.jmsg[1], &challenge)
 				json.Unmarshal(msg.jmsg[2], &ok)
 				json.Unmarshal(msg.jmsg[3], &notice)
-				fmt.Printf("OK: %s %t %s\n", challenge, ok, notice)
+				logger.Printf("OK: %s %t %s\n", challenge, ok, notice)
 			case [2]byte{'A', 'U'}:
 				nip42_auth.Do(func() {
 					buf := bytes.NewBuffer(nil)
@@ -318,7 +330,7 @@ func (msg *Message) Release() {
 	msg.pool.Put(msg.jmsg)
 }
 
-func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Reader, conn io.ReadWriter, json_msgs chan Message) error {
+func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, server_nct bool, br *bufio.Reader, conn io.ReadWriter, json_msgs chan Message) error {
 	// r0 is for reading from connection (before unmasking, etc)
 	// fr is flate reader (decompression)
 	var r0, fr io.Reader
@@ -350,11 +362,11 @@ func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Re
 		defer func() {
 			comp_f := (&big.Float{}).SetInt64(downloaded)
 			decomp_f := (&big.Float{}).SetInt64(int64(decompressed))
-			fmt.Printf("bytes downloaded (compressed): %.0f\n", comp_f)
-			fmt.Printf("bytes downloaded (decompressed): %.0f\n", decomp_f)
+			logger.Printf("bytes downloaded (compressed): %.0f\n", comp_f)
+			logger.Printf("bytes downloaded (decompressed): %.0f\n", decomp_f)
 			if decomp_f.Cmp(comp_f) == +1 {
 				comp_f.Mul(comp_f, big.NewFloat(100))
-				fmt.Printf("compression ratio: %.0f%%\n", comp_f.Quo(comp_f, decomp_f))
+				logger.Printf("compression ratio: %.0f%%\n", comp_f.Quo(comp_f, decomp_f))
 			}
 		}()
 	}
@@ -409,7 +421,7 @@ func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Re
 				if n, err := io.ReadFull(control, b[:]); err != nil || n != 2 {
 					panic(err)
 				}
-				fmt.Println("closed with status code:", int(b[0])*256+int(b[1]))
+				logger.Printf("closed with status code: %d", int(b[0])*256+int(b[1]))
 				return nil
 			case ws.OpPing:
 				ctrl_bytes, _ := io.ReadAll(control)
