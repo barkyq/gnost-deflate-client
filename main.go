@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-
 	"sync"
 	"time"
 
@@ -231,11 +230,6 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	var notice string
 	var challenge string
 	var ok bool
-	sk := nostr.GeneratePrivateKey()
-	pk, e := nostr.GetPublicKey(sk)
-	if e != nil {
-		panic(e)
-	}
 
 	// send the REQ
 	go func() {
@@ -276,9 +270,12 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 
 	// count the returned notes:
 	var counter int
+
+	// handle received json messages
 	for {
 		select {
 		case <-ctx.Done():
+			// the websocket receive handler has returned
 			return
 		case msg := <-json_msgs:
 			switch [2]byte{msg.jmsg[0][1], msg.jmsg[0][2]} {
@@ -301,6 +298,11 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				logger.Printf("OK: %s %t %s\n", challenge, ok, notice)
 			case [2]byte{'A', 'U'}:
 				nip42_auth.Do(func() {
+					sk := nostr.GeneratePrivateKey()
+					pk, err := nostr.GetPublicKey(sk)
+					if err != nil {
+						panic(err)
+					}
 					buf := bytes.NewBuffer(nil)
 					enc := json.NewEncoder(buf)
 					enc.SetEscapeHTML(false)
@@ -308,7 +310,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 					event := nip42.CreateUnsignedAuthEvent(challenge, pk, scheme+"://"+hostname)
 					event.Sign(sk)
 					reply := []interface{}{"AUTH", event}
-					if err := enc.Encode(reply); err != nil {
+					if err = enc.Encode(reply); err != nil {
 						panic(err)
 					}
 					writer.Write(buf.Bytes())
@@ -355,10 +357,12 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 		},
 	}
 
+	// counters
 	var downloaded int64
 	var decompressed int
 
 	if permessage_deflate {
+		// log the compression stats
 		defer func() {
 			comp_f := (&big.Float{}).SetInt64(downloaded)
 			decomp_f := (&big.Float{}).SetInt64(int64(decompressed))
