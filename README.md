@@ -13,11 +13,11 @@ echo '[{
 }]' | ./gnost-deflate-client --port 443 --scheme wss --host nos.lol --output events.jsonl
 ```
 
-# compatibility with strfry
+#### compatibility with strfry
 Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [strfry](https://github.com/hoytech/strfry)
 ```zsh
 echo '[{
 "authors":["3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"],
 "since":1676600000
-}]' | gnost-deflate-client --port 443 --scheme wss --host nos.lol --output - | strfry import
+}]' | ./gnost-deflate-client --port 443 --scheme wss --host nos.lol --output - | strfry import
 ```
