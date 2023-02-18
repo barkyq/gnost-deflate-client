@@ -4,20 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"compress/flate"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"math/big"
-	"os"
-
-	"sync"
-
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/url"
+	"os"
+	"sync"
 
 	"github.com/gobwas/httphead"
 	"github.com/gobwas/ws"
@@ -26,9 +24,9 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip42"
 )
 
-var scheme = flag.String("scheme", "ws", "ws or wss")
-var hostname = flag.String("host", "localhost", "port")
-var port = flag.Int("port", 8080, "port")
+var scheme = flag.String("scheme", "wss", "ws or wss")
+var hostname = flag.String("host", "nos.lol", "port")
+var port = flag.Int("port", 443, "port")
 var output = flag.String("output", "events.jsonl", "output file")
 
 // Read Buffer Size
@@ -214,24 +212,21 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 		buf := bytes.NewBuffer(nil)
 		enc := json.NewEncoder(buf)
 		enc.SetEscapeHTML(false)
-		for i := 0; i < 1; i++ {
-			func() {
-				b := make([]byte, 7)
-				rand.Reader.Read(b)
-				subid := fmt.Sprintf("%x", b[0:7])
 
-				send := []interface{}{"REQ", subid}
-				for _, f := range filters {
-					send = append(send, f)
-				}
-				buf.Reset()
-				if err := enc.Encode(send); err != nil {
-					panic(err)
-				}
-				writer.Write(buf.Bytes())
-				writer.Write(flush_bytes[:])
-			}()
+		b := make([]byte, 7)
+		rand.Reader.Read(b)
+		subid := fmt.Sprintf("%x", b[0:7])
+
+		send := []interface{}{"REQ", subid}
+		for _, f := range filters {
+			send = append(send, f)
 		}
+
+		if err := enc.Encode(send); err != nil {
+			panic(err)
+		}
+		writer.Write(buf.Bytes())
+		writer.Write(flush_bytes[:])
 	}()
 
 	// handle returned messages
