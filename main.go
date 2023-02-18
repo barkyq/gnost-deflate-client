@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gobwas/httphead"
 	"github.com/gobwas/ws"
@@ -97,9 +99,17 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 		_, server_nct = opt.Parameters.Get("server_no_context_takeover")
 	jump:
 	}
-	fmt.Printf("permessage_deflate: %t\n", permessage_deflate)
 	if permessage_deflate {
-		fmt.Printf("server_no_context_takeover: %t\nclient_no_context_takeover: %t\n", server_nct, client_nct)
+		fmt.Print("permessage_deflate")
+		if server_nct {
+			fmt.Print("; server_no_context_takeover")
+		}
+		if client_nct {
+			fmt.Print("; client_no_context_takeover")
+		}
+		fmt.Println()
+	} else {
+		fmt.Println("relay does not implement permessage_deflate.")
 	}
 
 	json_msgs := make(chan Message, 5)
@@ -133,6 +143,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 					case e == nil:
 					case e == io.EOF:
 						wpp.Close()
+						return
 					default:
 						panic(e)
 					}
@@ -169,7 +180,14 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				switch {
 				case e == nil:
 				case e == io.EOF:
-					ws.WriteFrame(conn, ws.NewCloseFrame(ws.NewCloseFrameBody(ws.StatusNormalClosure, "leaving")))
+					if e := ws.WriteFrame(conn, ws.NewCloseFrame(ws.NewCloseFrameBody(ws.StatusNormalClosure, "goodbye"))); e != nil {
+						panic(e)
+					}
+					time.Sleep(1 * time.Second)
+					if cl, ok := conn.(io.Closer); ok == true {
+						cl.Close()
+					}
+					return
 				default:
 					panic(e)
 				}
@@ -194,7 +212,11 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	go func() {
 		defer cancel()
 		if e := payload_conn_handler(permessage_deflate, server_nct, br, conn, json_msgs); e != nil {
-			panic(e)
+			if e == io.EOF || errors.Is(e, net.ErrClosed) {
+				fmt.Println("relay closed the connection ungracefully.")
+			} else {
+				panic(e)
+			}
 		}
 	}()
 
@@ -253,7 +275,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				}
 				close()
 				writer.Close()
-				fmt.Printf("EOSE: %d events returned\n", counter)
+				fmt.Printf("EOSE: %d events saved to %s\n", counter, output)
 			case [2]byte{'E', 'V'}:
 				counter++
 				file_enc.Encode(msg.jmsg[2])
@@ -324,6 +346,19 @@ func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Re
 	var downloaded int64
 	var decompressed int
 
+	if permessage_deflate {
+		defer func() {
+			comp_f := (&big.Float{}).SetInt64(downloaded)
+			decomp_f := (&big.Float{}).SetInt64(int64(decompressed))
+			fmt.Printf("bytes downloaded (compressed): %.0f\n", comp_f)
+			fmt.Printf("bytes downloaded (decompressed): %.0f\n", decomp_f)
+			if decomp_f.Cmp(comp_f) == +1 {
+				comp_f.Mul(comp_f, big.NewFloat(100))
+				fmt.Printf("compression ratio: %.0f%%\n", comp_f.Quo(comp_f, decomp_f))
+			}
+		}()
+	}
+
 	var header ws.Header
 	var remaining int64
 	var compressed bool
@@ -338,12 +373,7 @@ func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Re
 		if h, e := ws.ReadHeader(r0); e == nil {
 			header = h
 		} else {
-			switch e {
-			case io.EOF:
-				return e
-			default:
-				panic(e)
-			}
+			return e
 		}
 		if header.OpCode != ws.OpContinuation {
 			compressed = header.Rsv1()
@@ -376,14 +406,8 @@ func payload_conn_handler(permessage_deflate bool, server_nct bool, br *bufio.Re
 			switch header.OpCode {
 			case ws.OpClose:
 				var b [2]byte // status code
-				io.ReadFull(control, b[:])
-				if permessage_deflate {
-					comp_f := (&big.Float{}).SetInt64(downloaded)
-					decomp_f := (&big.Float{}).SetInt64(int64(decompressed))
-					fmt.Printf("downloaded (compressed): %.0f\n", comp_f)
-					fmt.Printf("downloaded (decompressed): %.0f\n", decomp_f)
-					comp_f.Mul(comp_f, big.NewFloat(100))
-					fmt.Printf("compression ratio: %.0f%%\n", comp_f.Quo(comp_f, decomp_f))
+				if n, err := io.ReadFull(control, b[:]); err != nil || n != 2 {
+					panic(err)
 				}
 				fmt.Println("closed with status code:", int(b[0])*256+int(b[1]))
 				return nil
