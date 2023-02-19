@@ -17,7 +17,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gobwas/httphead"
@@ -31,6 +33,7 @@ var scheme = flag.String("scheme", "wss", "ws or wss")
 var hostname = flag.String("host", "nos.lol", "relay hostname")
 var port = flag.Int("port", 443, "remote TCP port")
 var output = flag.String("output", "events.jsonl", "output file. use - for stdout")
+var keepalive = flag.Bool("keepalive", false, "keep connection alive")
 
 // Read Buffer Size
 const RBS = 1024
@@ -43,10 +46,10 @@ func main() {
 		panic(err)
 	}
 	logger := log.New(os.Stderr, "", 0)
-	nostr_handler(*output, *scheme, *hostname, *port, f, logger)
+	nostr_handler(*output, *scheme, *hostname, *port, *keepalive, f, logger)
 }
 
-func nostr_handler(output string, scheme string, hostname string, port int, filters nostr.Filters, logger *log.Logger) {
+func nostr_handler(output string, scheme string, hostname string, port int, keepalive bool, filters nostr.Filters, logger *log.Logger) {
 	u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port))
 	if err != nil {
 		panic(err)
@@ -137,7 +140,6 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 		reader = rpp
 		writer = wp
 		go func() {
-			var flate_writer *flate.Writer
 			buf := make([]byte, RBS)
 			flate_writer, err := flate.NewWriter(wpp, flate.BestCompression)
 			if err != nil {
@@ -231,28 +233,29 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	var challenge string
 	var ok bool
 
-	// send the REQ
-	go func() {
-		buf := bytes.NewBuffer(nil)
-		enc := json.NewEncoder(buf)
-		enc.SetEscapeHTML(false)
+	// send the message
+	if len(filters) > 0 {
+		go func() {
+			buf := bytes.NewBuffer(nil)
+			enc := json.NewEncoder(buf)
+			enc.SetEscapeHTML(false)
 
-		b := make([]byte, 7)
-		rand.Reader.Read(b)
-		subid := fmt.Sprintf("%x", b[0:7])
+			b := make([]byte, 7)
+			rand.Reader.Read(b)
+			subid := fmt.Sprintf("%x", b[0:7])
 
-		send := []interface{}{"REQ", subid}
-		for _, f := range filters {
-			send = append(send, f)
-		}
+			send := []interface{}{"REQ", subid}
+			for _, f := range filters {
+				send = append(send, f)
+			}
 
-		if err := enc.Encode(send); err != nil {
-			panic(err)
-		}
-		writer.Write(buf.Bytes())
-		writer.Write(flush_bytes[:])
-	}()
-
+			if err := enc.Encode(send); err != nil {
+				panic(err)
+			}
+			writer.Write(buf.Bytes())
+			writer.Write(flush_bytes[:])
+		}()
+	}
 	// handle returned messages
 	nip42_auth := sync.Once{}
 	var file_enc *json.Encoder
@@ -271,11 +274,24 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 	// count the returned notes:
 	var counter int
 
+	if keepalive {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			fmt.Println()
+			writer.Close()
+		}()
+	}
+
 	// handle received json messages
 	for {
 		select {
 		case <-ctx.Done():
 			// the websocket receive handler has returned
+			if keepalive {
+				logger.Printf("total: %d events written to %s\n", counter, output)
+			}
 			return
 		case msg := <-json_msgs:
 			switch [2]byte{msg.jmsg[0][1], msg.jmsg[0][2]} {
@@ -283,7 +299,9 @@ func nostr_handler(output string, scheme string, hostname string, port int, filt
 				if err := json.Unmarshal(msg.jmsg[1], &challenge); err != nil {
 					panic(err)
 				}
-				writer.Close()
+				if !keepalive {
+					writer.Close()
+				}
 				logger.Printf("EOSE: %d events written to %s\n", counter, output)
 			case [2]byte{'E', 'V'}:
 				counter++
