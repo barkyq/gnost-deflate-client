@@ -14,7 +14,7 @@ echo '[{
 ```
 
 #### Keep connection alive
-Use the `--keepalive N` option to keep the connection alive, sending a PING frame to the relay every `N` seconds. Send `C-c` to cleanly shutdown the listener.
+Use the `--keepalive N` option to keep the connection alive, sending a PING frame to the relay every `N` seconds. New returned events will be appended to the `--output` file. Enter `C-c` to cleanly shutdown the listener.
 
 #### Compatibility with strfry
 Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [strfry](https://github.com/hoytech/strfry)
