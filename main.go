@@ -452,21 +452,24 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 				n, _ = r0.Read(buf[:remaining])
 			}
 			remaining -= int64(n)
+			// server frames should not be masked.
 			if header.Masked {
 				ws.Cipher(buf[:n], header.Mask, 0)
 			}
-			// control frames can be interjected
+			// control frames can be interjected.
 			if !header.OpCode.IsControl() {
 				payload.Write(buf[:n])
 			} else {
 				control.Write(buf[:n])
 			}
 		}
+
+		// handle continuation
 		if !header.Fin {
 			continue
 		}
 
-		//Flush Control
+		// handle control
 		if header.OpCode.IsControl() {
 			switch header.OpCode {
 			case ws.OpClose:
@@ -488,7 +491,7 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 		}
 
 		// handle payload
-		downloaded += header.Length
+		downloaded += int64(payload.Len())
 		if compressed {
 			payload.Write([]byte{0x00, 0x00, 0xff, 0xff})
 			decoder = fr_decoder
