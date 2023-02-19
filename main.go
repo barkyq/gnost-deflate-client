@@ -272,7 +272,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 	file_enc.SetEscapeHTML(false)
 
 	// count the returned notes:
-	var counter int
+	counter := &Counter{}
 
 	if keepalive > 0 {
 		sigs := make(chan os.Signal, 1)
@@ -283,6 +283,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 			for {
 				select {
 				case <-ticker.C:
+					logger.Printf("%d new events, sending PING", counter.Read())
 					if e := ws.WriteFrame(conn, frame); e != nil {
 						writer.Close()
 						return
@@ -302,7 +303,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 		case <-ctx.Done():
 			// the websocket receive handler has returned
 			if keepalive > 0 {
-				logger.Printf("total: %d events written to %s\n", counter, output)
+				logger.Printf("total: %d events written to %s\n", counter.Total(), output)
 			}
 			return
 		case msg := <-json_msgs:
@@ -314,9 +315,9 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 				if keepalive == 0 {
 					writer.Close()
 				}
-				logger.Printf("EOSE: %d events written to %s\n", counter, output)
+				logger.Printf("EOSE: %d events written to %s\n", counter.Read(), output)
 			case [2]byte{'E', 'V'}:
-				counter++
+				counter.Increment(1)
 				file_enc.Encode(msg.jmsg[2])
 			case [2]byte{'N', 'O'}:
 				json.Unmarshal(msg.jmsg[1], &notice)
@@ -459,7 +460,7 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 				return nil
 			case ws.OpPing:
 				frame := ws.MaskFrame(ws.NewPongFrame(control.Bytes()))
-				logger.Printf("PING received")
+				logger.Printf("PING received, sending PONG")
 				ws.WriteFrame(conn, frame)
 			case ws.OpPong:
 				logger.Printf("PONG received")
@@ -492,4 +493,32 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 			r0 = conn
 		}
 	}
+}
+
+type Counter struct {
+	total int
+	new   int
+	mu    sync.Mutex
+}
+
+func (c *Counter) Increment(n int) {
+	c.mu.Lock()
+	c.new += n
+	c.mu.Unlock()
+}
+
+func (c *Counter) Read() (new int) {
+	c.mu.Lock()
+	new = c.new
+	c.total += c.new
+	c.new = 0
+	c.mu.Unlock()
+	return
+}
+
+func (c *Counter) Total() int {
+	c.Read()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.total
 }
