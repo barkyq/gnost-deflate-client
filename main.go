@@ -33,7 +33,7 @@ var scheme = flag.String("scheme", "wss", "ws or wss")
 var hostname = flag.String("host", "nos.lol", "relay hostname")
 var port = flag.Int("port", 443, "remote TCP port")
 var output = flag.String("output", "events.jsonl", "output file. use - for stdout")
-var keepalive = flag.Bool("keepalive", false, "keep connection alive")
+var keepalive = flag.Int64("keepalive", 0, "keep connection alive (set to number of seconds between sending pings to relay)")
 
 // Read Buffer Size
 const RBS = 1024
@@ -45,11 +45,11 @@ func main() {
 	if err := dec.Decode(&f); err != nil {
 		panic(err)
 	}
-	logger := log.New(os.Stderr, "", 0)
+	logger := log.Default()
 	nostr_handler(*output, *scheme, *hostname, *port, *keepalive, f, logger)
 }
 
-func nostr_handler(output string, scheme string, hostname string, port int, keepalive bool, filters nostr.Filters, logger *log.Logger) {
+func nostr_handler(output string, scheme string, hostname string, port int, keepalive int64, filters nostr.Filters, logger *log.Logger) {
 	u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port))
 	if err != nil {
 		panic(err)
@@ -274,13 +274,25 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 	// count the returned notes:
 	var counter int
 
-	if keepalive {
+	if keepalive > 0 {
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		ticker := time.NewTicker(time.Duration(keepalive) * time.Second)
+		frame := ws.MaskFrame(ws.NewPingFrame([]byte(nil)))
 		go func() {
-			<-sigs
-			fmt.Println()
-			writer.Close()
+			for {
+				select {
+				case <-ticker.C:
+					if e := ws.WriteFrame(conn, frame); e != nil {
+						writer.Close()
+						return
+					}
+				case <-sigs:
+					fmt.Println()
+					writer.Close()
+					return
+				}
+			}
 		}()
 	}
 
@@ -289,7 +301,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 		select {
 		case <-ctx.Done():
 			// the websocket receive handler has returned
-			if keepalive {
+			if keepalive > 0 {
 				logger.Printf("total: %d events written to %s\n", counter, output)
 			}
 			return
@@ -299,7 +311,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 				if err := json.Unmarshal(msg.jmsg[1], &challenge); err != nil {
 					panic(err)
 				}
-				if !keepalive {
+				if keepalive == 0 {
 					writer.Close()
 				}
 				logger.Printf("EOSE: %d events written to %s\n", counter, output)
@@ -446,10 +458,11 @@ func websocket_receive_handler(logger *log.Logger, permessage_deflate bool, serv
 				logger.Printf("closed with status code: %d", int(b[0])*256+int(b[1]))
 				return nil
 			case ws.OpPing:
-				ctrl_bytes, _ := io.ReadAll(control)
-				frame := ws.NewPongFrame(ctrl_bytes)
+				frame := ws.MaskFrame(ws.NewPongFrame(control.Bytes()))
+				logger.Printf("PING received")
 				ws.WriteFrame(conn, frame)
 			case ws.OpPong:
+				logger.Printf("PONG received")
 			}
 			control.Reset()
 			continue
