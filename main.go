@@ -50,11 +50,7 @@ func main() {
 }
 
 func nostr_handler(output string, scheme string, hostname string, port int, keepalive int64, filters nostr.Filters, logger *log.Logger) {
-	u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port))
-	if err != nil {
-		panic(err)
-	}
-
+	var url *url.URL
 	var conn io.ReadWriter
 	switch scheme {
 	case "ws":
@@ -63,14 +59,36 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 		} else {
 			conn = c
 		}
+		if port == 80 {
+			if u, err := url.Parse(fmt.Sprintf("%s://%s", scheme, hostname)); err == nil {
+				url = u
+			} else {
+				panic(err)
+			}
+		}
 	case "wss":
 		if c, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", hostname, port), &tls.Config{ServerName: hostname}); err != nil {
 			panic(err)
 		} else {
 			conn = c
 		}
+		if port == 443 {
+			if u, err := url.Parse(fmt.Sprintf("%s://%s", scheme, hostname)); err == nil {
+				url = u
+			} else {
+				panic(err)
+			}
+		}
 	default:
 		panic("invalid scheme")
+	}
+
+	if url == nil {
+		if u, err := url.Parse(fmt.Sprintf("%s://%s:%d", scheme, hostname, port)); err == nil {
+			url = u
+		} else {
+			panic(err)
+		}
 	}
 
 	info, e := NIP11_fetch(conn, hostname)
@@ -91,7 +109,7 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 		Header:     head,
 		Extensions: []httphead.Option{p.Option()},
 	}
-	br, handshake, err := d.Upgrade(conn, u)
+	br, handshake, err := d.Upgrade(conn, url)
 	if err != nil {
 		panic(err)
 	}
