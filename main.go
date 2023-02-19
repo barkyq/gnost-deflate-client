@@ -45,7 +45,7 @@ func main() {
 	if err := dec.Decode(&f); err != nil {
 		panic(err)
 	}
-	logger := log.Default()
+	logger := log.New(os.Stderr, "(gnost-deflate-client) ", log.LstdFlags|log.Lmsgprefix)
 	nostr_handler(*output, *scheme, *hostname, *port, *keepalive, f, logger)
 }
 
