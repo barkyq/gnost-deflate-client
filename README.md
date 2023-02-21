@@ -20,7 +20,7 @@ Use the `--keepalive N` option to keep the connection alive, sending a PING fram
 Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [gnost-relay](https://github.com/barkyq/gnost-relay) or [strfry](https://github.com/hoytech/strfry)
 ```zsh
 echo '[{"since":1676863922,"kinds":[1]}]' |\
-gnost-deflate-client --port 443 --scheme wss --host knostr.neutrine.com --keepalive 30 --output - |\
+gnost-deflate-client --port 443 --scheme wss --host nos.lol --keepalive 30 --output - |\
 DATABASE_URL=postgres://x gnost-relay --import
 ```
 ```zsh
