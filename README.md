@@ -16,8 +16,13 @@ echo '[{
 #### Keep connection alive
 Use the `--keepalive N` option to keep the connection alive, sending a PING frame to the relay every `N` seconds. New returned events will be appended to the `--output` file. Enter `C-c` to cleanly shutdown the listener.
 
-#### Compatibility with strfry
-Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [strfry](https://github.com/hoytech/strfry)
+#### Compatibility with relays
+Set the output to `-` in order to print the returned events to `stdout`. This can be composed with the `import` command for a local instance of [gnost-relay](https://github.com/barkyq/gnost-relay) or [strfry](https://github.com/hoytech/strfry)
+```zsh
+echo '[{"since":1676863922,"kinds":[1]}]' |\
+gnost-deflate-client --port 443 --scheme wss --host nos.lol --keepalive 30 --output - |\
+DATABASE_URL=postgres://x gnost-relay --import
+```
 ```zsh
 echo '[{
 "authors":["3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"],
