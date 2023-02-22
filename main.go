@@ -98,7 +98,9 @@ func nostr_handler(output string, scheme string, hostname string, port int, keep
 	logger.Printf("software: %s\n", info.Software)
 
 	head := make(ws.HandshakeHeaderHTTP)
-	head["User-Agent"] = []string{"barkyq-websocket-client/1.0"}
+	head["User-Agent"] = []string{"go-websocket-client/1.0"}
+	// Some relays want the Origin header (namely https://github.com/v0l/nostr-rs-relay)
+	head["Origin"] = []string{"http://go.dev"}
 
 	// these parameters will be negotiated in the extension
 	p := wsflate.Parameters{
